@@ -1,0 +1,16 @@
+default_agent: solutionChatbotAgentCore
+is_agentcore_create_with_iac: true
+agents:
+  solutionChatbotAgentCore:
+    name: solutionChatbotAgentCore
+    entrypoint: /Users/tingzhang/Documents/Repos/bedrock-agentcore-starter-toolkit/ultraCyan/src/main.py
+    deployment_type: container
+    source_path: /Users/tingzhang/Documents/Repos/bedrock-agentcore-starter-toolkit/ultraCyan/src
+    aws:
+      account: null
+      region: null
+    bedrock_agentcore:
+      agent_id: null
+      agent_arn: null
+      agent_session_id: null
+    is_generated_by_agentcore_create: true
