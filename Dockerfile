@@ -8,16 +8,14 @@ ENV UV_SYSTEM_PYTHON=1 \
     PYTHONUNBUFFERED=1 \
     DOCKER_CONTAINER=1
 
+# OTEL/X-Ray configuration will be injected via runtime environment variables
+# See terraform/bedrock_agentcore.tf for OTEL_TRACES_EXPORTER configuration
+
 
 
 COPY pyproject.toml pyproject.toml
-# Install from requirements file
+# Install from requirements file (includes aws-opentelemetry-distro and boto3)
 RUN uv pip install -r pyproject.toml
-
-
-
-
-RUN uv pip install aws-opentelemetry-distro==0.12.2
 
 
 # Signal that this is running in Docker for host binding logic

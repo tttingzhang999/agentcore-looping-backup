@@ -1,4 +1,6 @@
 import os
+from opentelemetry import baggage
+from opentelemetry.context import attach
 from strands import Agent, tool
 from strands_tools.code_interpreter import AgentCoreCodeInterpreter
 from bedrock_agentcore import BedrockAgentCoreApp
@@ -32,6 +34,11 @@ log = app.logger
 @app.entrypoint
 async def invoke(payload, context):
     session_id = getattr(context, 'session_id', 'default')
+
+    # Set session ID in OTEL baggage for observability
+    # This propagates the session ID across distributed traces
+    ctx = baggage.set_baggage("session.id", session_id)
+    attach(ctx)  # Attach the context to make it active
 
     # Configure memory if available
     session_manager = None

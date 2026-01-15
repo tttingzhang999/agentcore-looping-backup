@@ -2,7 +2,8 @@ from strands.models import BedrockModel
 
 # Uses global inference profile for Claude Sonnet 4.5
 # https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-support.html
-MODEL_ID = "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
+MODEL_ID = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+
 
 def load_model() -> BedrockModel:
     """

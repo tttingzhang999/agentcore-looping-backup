@@ -242,7 +242,7 @@ resource "aws_iam_role" "agentcore_runtime_execution_role" {
 
 # https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-permissions.html#runtime-permissions-execution
 resource "aws_iam_role_policy" "agentcore_runtime_execution_role_policy" {
-  role   = aws_iam_role.agentcore_runtime_execution_role.id
+  role = aws_iam_role.agentcore_runtime_execution_role.id
   name = "${var.app_name}-AgentCoreRuntimeExecutionPolicy"
   policy = jsonencode({
     Version = "2012-10-17"
@@ -266,6 +266,8 @@ resource "aws_iam_role_policy" "agentcore_runtime_execution_role_policy" {
         ]
         Resource = [
           "arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/bedrock-agentcore/runtimes/*",
+          "arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:aws/spans",
+          "arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/application-signals/data",
         ]
       },
       {
@@ -285,6 +287,8 @@ resource "aws_iam_role_policy" "agentcore_runtime_execution_role_policy" {
         ]
         Resource = [
           "arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/bedrock-agentcore/runtimes/*:log-stream:*",
+          "arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:aws/spans:*",
+          "arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/application-signals/data:*",
         ]
       },
       {
@@ -302,6 +306,7 @@ resource "aws_iam_role_policy" "agentcore_runtime_execution_role_policy" {
           "xray:PutTelemetryRecords",
           "xray:GetSamplingRules",
           "xray:GetSamplingTargets",
+          "xray:GetTraceSegmentDestination",
         ]
         Resource = [
           "*",
@@ -351,7 +356,7 @@ resource "aws_iam_role_policy" "agentcore_runtime_execution_role_policy" {
 # AgentCore Memory
 ################################################################################
 resource "aws_bedrockagentcore_memory" "agentcore_memory" {
-  name                  = "solutionChatbotAgentCore_memory"
+  name                  = "solutionChatbotAgentCore_memory_ultraCyan"
   description           = "Memory resource with 30 days event expiry"
   event_expiry_duration = 30
 }
@@ -369,7 +374,7 @@ resource "aws_bedrockagentcore_memory" "agentcore_memory" {
 # AgentCore Runtime
 ################################################################################
 resource "aws_bedrockagentcore_agent_runtime" "agentcore_runtime" {
-  agent_runtime_name = "solutionChatbotAgentCore"
+  agent_runtime_name = "solutionChatbotAgentCore_ultraCyan"
   role_arn           = aws_iam_role.agentcore_runtime_execution_role.arn
 
   agent_runtime_artifact {
@@ -384,15 +389,15 @@ resource "aws_bedrockagentcore_agent_runtime" "agentcore_runtime" {
     network_mode = "PUBLIC"
   }
   environment_variables = {
-    AWS_REGION = data.aws_region.current.region
-    MEMORY_ID = aws_bedrockagentcore_memory.agentcore_memory.id
-    GATEWAY_URL = aws_bedrockagentcore_gateway.agentcore_gateway.gateway_url
+    AWS_REGION            = data.aws_region.current.region
+    MEMORY_ID             = aws_bedrockagentcore_memory.agentcore_memory.id
+    GATEWAY_URL           = aws_bedrockagentcore_gateway.agentcore_gateway.gateway_url
     COGNITO_CLIENT_ID     = aws_cognito_user_pool_client.cognito_app_client.id
     COGNITO_CLIENT_SECRET = aws_cognito_user_pool_client.cognito_app_client.client_secret
     COGNITO_TOKEN_URL     = "https://${aws_cognito_user_pool_domain.cognito_domain.domain}.auth.${data.aws_region.current.region}.amazoncognito.com/oauth2/token"
     COGNITO_SCOPE         = "${aws_cognito_resource_server.cognito_resource_server.identifier}/basic"
   }
-  
+
 }
 
 
@@ -400,8 +405,8 @@ resource "aws_bedrockagentcore_agent_runtime" "agentcore_runtime" {
 # AgentCore Runtime Endpoints
 ################################################################################
 resource "aws_bedrockagentcore_agent_runtime_endpoint" "dev_endpoint" {
-  name             = "DEV"
-  agent_runtime_id = aws_bedrockagentcore_agent_runtime.agentcore_runtime.agent_runtime_id
+  name                  = "DEV"
+  agent_runtime_id      = aws_bedrockagentcore_agent_runtime.agentcore_runtime.agent_runtime_id
   agent_runtime_version = var.agent_runtime_version
 }
 
@@ -410,5 +415,113 @@ resource "aws_bedrockagentcore_agent_runtime_endpoint" "prod_endpoint" {
   name                  = "PROD"
   agent_runtime_id      = aws_bedrockagentcore_agent_runtime.agentcore_runtime.agent_runtime_id
   agent_runtime_version = var.agent_runtime_version
-  depends_on = [aws_bedrockagentcore_agent_runtime_endpoint.dev_endpoint] # Prevents ConflictException
+  depends_on            = [aws_bedrockagentcore_agent_runtime_endpoint.dev_endpoint] # Prevents ConflictException
 }
+
+################################################################################
+# CloudWatch Transaction Search Configuration
+# Required for AgentCore Observability
+# See: https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Enable-TransactionSearch.html
+################################################################################
+
+# Step 1: Create CloudWatch Logs resource policy to allow X-Ray to send traces
+# Note: aws/spans is a reserved log group name that X-Ray automatically creates
+# when the first span is sent. We cannot manually create it.
+# See: https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Transaction-Search-ingesting-span-log-groups.html
+# See: https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/AWS-logs-and-resource-policy.html
+resource "aws_cloudwatch_log_resource_policy" "transaction_search_xray_access" {
+  policy_name = "${var.app_name}-TransactionSearchXRayAccess"
+
+  policy_document = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "TransactionSearchXRayAccess"
+        Effect = "Allow"
+        Principal = {
+          Service = "xray.amazonaws.com"
+        }
+        Action = "logs:PutLogEvents"
+        Resource = [
+          "arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:aws/spans:*",
+          "arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/application-signals/data:*"
+        ]
+        Condition = {
+          ArnLike = {
+            "aws:SourceArn" = "arn:aws:xray:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:*"
+          }
+          StringEquals = {
+            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+        }
+      }
+    ]
+  })
+}
+
+# Step 2: Configure X-Ray trace segment destination to CloudWatch Logs
+# Note: Terraform AWS provider doesn't have a direct resource for this,
+# so we use null_resource with AWS CLI command
+# This command is idempotent - it will skip if already set to CloudWatchLogs
+resource "null_resource" "xray_trace_segment_destination" {
+  depends_on = [aws_cloudwatch_log_resource_policy.transaction_search_xray_access]
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      CURRENT_DEST=$(aws xray get-trace-segment-destination --region ${data.aws_region.current.region} --query 'Destination' --output text 2>/dev/null || echo "")
+      if [ "$CURRENT_DEST" != "CloudWatchLogs" ]; then
+        aws xray update-trace-segment-destination --destination CloudWatchLogs --region ${data.aws_region.current.region}
+      else
+        echo "X-Ray trace segment destination is already set to CloudWatchLogs, skipping update."
+      fi
+    EOT
+  }
+
+  triggers = {
+    policy_id = aws_cloudwatch_log_resource_policy.transaction_search_xray_access.id
+  }
+}
+
+# Step 3: Configure X-Ray indexing rule (optional, defaults to 1% sampling)
+# Note: UpdateIndexingRule is an X-Ray API that doesn't have a direct Terraform resource
+# This sets the sampling percentage for spans to be indexed (1% is free)
+# Using null_resource to execute AWS CLI command
+resource "null_resource" "xray_indexing_rule" {
+  depends_on = [null_resource.xray_trace_segment_destination]
+
+  provisioner "local-exec" {
+    command = "aws xray update-indexing-rule --name 'Default' --rule '{\"Probabilistic\": {\"DesiredSamplingPercentage\": 1}}' --region ${data.aws_region.current.region} || true"
+  }
+
+  triggers = {
+    trace_destination = null_resource.xray_trace_segment_destination.id
+  }
+}
+
+################################################################################
+# CloudWatch Logs Delivery Configuration for AgentCore Runtime
+# Required for traces to flow: Runtime → X-Ray → aws/spans
+# See: https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/observability-configure.html (Section 7)
+################################################################################
+
+# NOTE: CloudWatch Logs Delivery resources (sources, destinations, and deliveries)
+# are AUTOMATICALLY created and managed by AgentCore runtime.
+#
+# When you create an AgentCore runtime, AWS automatically provisions:
+# 1. Delivery sources (APPLICATION_LOGS and TRACES)
+# 2. Delivery destinations (CWL for logs, XRAY for traces)
+# 3. Deliveries (connections between sources and destinations)
+#
+# These resources are named like "WdDeliverySource-XXXXXXXXX" and are visible via:
+#   aws logs describe-delivery-sources --region ap-northeast-1
+#   aws logs describe-deliveries --region ap-northeast-1
+#
+# DO NOT attempt to create these in Terraform as it will cause conflicts.
+#
+# For traces to flow to aws/spans, only the following configuration is needed:
+# ✅ X-Ray trace segment destination = CloudWatchLogs (configured above at line 466-483)
+# ✅ Runtime IAM role with xray:PutTraceSegments permission (configured above at line 302-314)
+# ✅ ADOT instrumentation in container CMD (configured in Dockerfile line 34)
+#
+# To verify the auto-created delivery configuration:
+#   aws logs describe-deliveries --region ap-northeast-1 | jq '.deliveries[] | select(.deliverySourceName | contains("WdDeliverySource"))'
